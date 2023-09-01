@@ -553,6 +553,7 @@ async function executeFetch(
       traceNode.sentTime = dateToProtoTimestamp(new Date());
     }
 
+    console.log(`[${fetch.serviceName}] sending ${JSON.stringify(variables, undefined, 2)}`);
     const response = await service.process({
       kind: GraphQLDataSourceRequestKind.INCOMING_OPERATION,
       request: {
@@ -566,6 +567,8 @@ async function executeFetch(
       document: fetch.operationDocumentNode,
       pathInIncomingRequest: currentCursor.path
     });
+
+    console.log(`[${fetch.serviceName}] response: ${JSON.stringify(response, undefined, 2)}`);
 
     if (response.errors) {
       const errorPathHelper = makeLazyErrorPathGenerator(fetch, currentCursor);

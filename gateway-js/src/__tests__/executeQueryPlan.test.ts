@@ -6233,4 +6233,194 @@ describe('executeQueryPlan', () => {
       }
     `);
   })
+
+  it('reproduction for #2743', async () => {
+    const store = [
+      {
+        id: "1",
+        title: "a book"
+      }
+    ];
+
+    const s1 = {
+      name: 'S1',
+      typeDefs: gql`
+        extend schema
+          @link(url: "https://specs.apollo.dev/federation/v2.3", import: ["@key"])
+
+        interface Product @key(fields:"id") {
+            id: ID!
+        }
+
+        type Book implements Product @key(fields:"id") {
+            id:ID!
+            title: String
+        }
+
+        type Query {
+            allProducts: [Product!]!
+        }
+      `,
+      resolvers: {
+        Product: {
+          __resolveReference: ({ id }: { id: string }) => store.find(e => e.id === id),
+          __resolveType: () => "Book"
+        },
+        Query: {
+          allProducts: () => store
+        }
+      }
+    }
+
+    const s2 = {
+      name: 'S2',
+      typeDefs: gql`
+        extend schema
+          @link(url: "https://specs.apollo.dev/federation/v2.3", import: ["@key", "@interfaceObject"])
+
+        type Product @key(fields:"id") @interfaceObject {
+            id: ID!
+            reviews: [String!]!
+        }
+      `,
+      resolvers: {
+        Product: {
+          __resolveReference: ({ id }: {id: string } ) => store.find(e => e.id === id),
+          reviews: () => ["a great product"]
+        },
+      }
+    }
+
+    const s3 = {
+      name: 'S3',
+      typeDefs: gql`
+        extend schema
+          @link(url: "https://specs.apollo.dev/federation/v2.3", import: ["@key", "@interfaceObject"])
+
+        type Product @key(fields:"id") @interfaceObject {
+            id: ID!
+        }
+
+        type Query {
+            searchProducts: [Product!]!
+        }
+      `,
+      resolvers: {
+        Product: {
+          __resolveReference: ({ id }: {id: string}) => store.find(e => e.id === id),
+        },
+        Query: {
+          searchProducts: () => store,
+        }
+      }
+    }
+
+    const { serviceMap, schema, queryPlanner} = getFederatedTestingSchema([ s1, s2, s3 ]);
+    global.console = require('console');
+    // That operation/plan/response looks good.
+    //let operation = parseOp(`
+    // {
+    //   searchProducts {
+    //    id
+    //    reviews
+    //   }
+    // }
+    //`, schema);
+
+    //let queryPlan = buildPlan(operation, queryPlanner);
+    //expect(queryPlan).toMatchInlineSnapshot(`
+    //  QueryPlan {
+    //    Sequence {
+    //      Fetch(service: "S3") {
+    //        {
+    //          searchProducts {
+    //            __typename
+    //            id
+    //          }
+    //        }
+    //      },
+    //      Flatten(path: "searchProducts.@") {
+    //        Fetch(service: "S2") {
+    //          {
+    //            ... on Product {
+    //              __typename
+    //              id
+    //            }
+    //          } =>
+    //          {
+    //            ... on Product {
+    //              reviews
+    //            }
+    //          }
+    //        },
+    //      },
+    //    },
+    //  }
+    //`);
+    //let response = await executePlan(queryPlan, operation, undefined, schema, serviceMap);
+    //expect(response.errors).toBeUndefined();
+    //expect(response.extensions).toBeUndefined();
+    //expect(response.data).toMatchInlineSnapshot(`
+    //  Object {
+    //    "searchProducts": Array [
+    //      Object {
+    //        "id": "1",
+    //        "reviews": Array [
+    //          "a great product",
+    //        ],
+    //      },
+    //    ],
+    //  }
+    //`);
+
+    // That one does not seem to have the correct query plan however
+    let operation = parseOp(`
+     {
+       searchProducts {
+        __typename
+        id
+        reviews
+       }
+     }
+    `, schema);
+
+    let queryPlan = buildPlan(operation, queryPlanner);
+    
+    //QueryPlan {
+    //  Sequence {
+    //    Fetch(service: "S3") {
+    //      {
+    //        searchProducts {
+    //          __typename
+    //          id
+    //        }
+    //      }
+    //    },
+    //    Flatten(path: "searchProducts.@") {
+    //      Fetch(service: "S2") {
+    //        {
+    //          ... on Product {
+    //            __typename
+    //            id
+    //          }
+    //        } =>
+    //        {
+    //          ... on Product {
+    //            reviews
+    //          }
+    //        }
+    //      },
+    //    },
+    //  },
+    //}
+
+    expect(queryPlan).toMatchInlineSnapshot(`
+
+    `);
+    let response = await executePlan(queryPlan, operation, undefined, schema, serviceMap);
+    expect(response.errors).toBeUndefined();
+    expect(response.extensions).toBeUndefined();
+    expect(response.data).toMatchInlineSnapshot(`
+    `);
+  })
 });

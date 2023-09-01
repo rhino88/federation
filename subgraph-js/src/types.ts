@@ -61,6 +61,8 @@ function addTypeNameToPossibleReturn<T>(
   maybeObject: null | T,
   typename: string,
 ): null | (T & { __typename: string }) {
+  console.log(`Adding __typename ${typename} to ${JSON.stringify(maybeObject)}: ${(maybeObject as any)["__typename"]}`);
+
   if (maybeObject !== null && typeof maybeObject === 'object') {
     Object.defineProperty(maybeObject, '__typename', {
       value: typename,
@@ -132,9 +134,7 @@ function ensureValidRuntimeType(
   }
 
   return runtimeType;
-}
-
-async function withResolvedType<T>({
+} async function withResolvedType<T>({
   type,
   value,
   context,
@@ -163,6 +163,8 @@ function definedResolveReference(type: GraphQLObjectType | GraphQLInterfaceType)
   return extensions.apollo?.subgraph?.resolveReference;
 }
 
+let id = 0;
+
 export function entitiesResolver({
   representations,
   context,
@@ -174,7 +176,7 @@ export function entitiesResolver({
 }) {
   return representations.map((reference: { __typename: string } & object) => {
     const { __typename } = reference;
-
+    const myId = ++id;
     const type = info.schema.getType(__typename);
     if (!type || !(isObjectType(type) || isInterfaceType(type))) {
       throw new Error(
@@ -203,6 +205,7 @@ export function entitiesResolver({
     const result = resolveReference ? resolveReference(reference, context, info) : reference;
 
     if (isInterfaceType(type)) {
+      console.log(`[${myId}] Doing itf resolution`);
       return withResolvedType({
         type,
         value: result,

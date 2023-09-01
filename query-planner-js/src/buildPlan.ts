@@ -581,7 +581,7 @@ class QueryPlanningTraversal<RV extends Vertex> {
   private newDependencyGraph(): FetchDependencyGraph {
     const { supergraphSchema, federatedQueryGraph } = this.parameters;
     const rootType = this.isTopLevel && this.hasDefers ? supergraphSchema.schemaDefinition.rootType(this.rootKind) : undefined;
-    return FetchDependencyGraph.create(supergraphSchema, federatedQueryGraph, this.startFetchIdGen, rootType);
+    return FetchDependencyGraph.create(supergraphSchema, federatedQueryGraph, this.startFetchIdGen, rootType, this.parameters);
   }
 
   // Moves the first closed branch to after any branch having more options.
@@ -1217,9 +1217,41 @@ class FetchGroup {
       return undefined;
     }
 
+    // For @interfaceObject, we also have a sort of "reverse" case to the previous one,
+    // where the group might look like:
+    //  { ... on Product { __typename id }} => { ... on Product { __typename} }
+    // which is usually useless, but with the one exception where this is resolving the
+    // concrete type of an interface object. In that case, `Product` will be an interface
+    // in the selection (we're querying the one subgraph that can resolve the concrete
+    // types), while one of the parent group will have Product as an interface object.
+    // In that case, we never consider this useless.
+    const isInterfaceTypeConditionFromInterfaceObject = (selection: Selection): boolean => {
+      if (selection.kind === 'FragmentSelection') {
+        const condition = selection.element.typeCondition;
+        if (condition && isInterfaceType(condition)) {
+          // Almost there: we know the type is an interface in the subgraph the selection comes from, and that it has some
+          // interface object in "some subgraphs". Let's now just make sure that one of the parent of the group is indeed one of those
+          // schema that has the type as an interface object.
+          return this.parents().some((p) => {
+            const typeInParent = this.dependencyGraph.subgraphSchemas.get(p.group.subgraphName)?.type(condition.name);
+            return !!typeInParent && isInterfaceObjectType(typeInParent);
+          });
+        }
+      }
+      return false;
+    }
+
     const inputSelections = this.inputs.selectionSets().flatMap((s) => s.selections());
     // Checks that every selection is contained in the input selections.
     const isUseless = this.selection.selections().every((selection) => {
+      if (isInterfaceTypeConditionFromInterfaceObject(selection) && selection?.selectionSet?.hasTopLevelTypenameField()) {
+        // If the selection is "resolving" an interface object, meaning that we come from a subgraph where the type
+        // is an interface object and are now querying a subgraph where the type is an actual interface, then we never
+        // want to call the group useless if it queries __typename, because even if __typename is in the inputs, it's
+        // not the "same" __typename value.
+        return false;
+      }
+
       const conditionInSupergraph = conditionInSupergraphIfInterfaceObject(selection);
       if (!conditionInSupergraph) {
         // We're not in the @interfaceObject case described above. We just check that an input selection contains the
@@ -2044,11 +2076,18 @@ class FetchDependencyGraph {
     private readonly rootGroups: MapWithCachedArrays<string, FetchGroup>,
     readonly groups: FetchGroup[],
     readonly deferTracking: DeferTracking,
+    readonly parameters: PlanningParameters<any>,
   ) {
     this.fetchIdGen = startingIdGen;
   }
 
-  static create(supergraphSchema: Schema, federatedQueryGraph: QueryGraph, startingIdGen: number, rootTypeForDefer: CompositeType | undefined) {
+  static create(
+    supergraphSchema: Schema,
+    federatedQueryGraph: QueryGraph,
+    startingIdGen: number,
+    rootTypeForDefer: CompositeType | undefined,
+    parameters: PlanningParameters<any>,
+  ) {
     return new FetchDependencyGraph(
       supergraphSchema,
       federatedQueryGraph.sources,
@@ -2057,6 +2096,7 @@ class FetchDependencyGraph {
       new MapWithCachedArrays(),
       [],
       DeferTracking.empty(rootTypeForDefer),
+      parameters,
     );
   }
 
@@ -2081,6 +2121,7 @@ class FetchDependencyGraph {
       new MapWithCachedArrays<string, FetchGroup>(),
       new Array(this.groups.length),
       this.deferTracking.clone(),
+      this.parameters,
     );
 
     for (const group of this.groups) {
@@ -2356,6 +2397,7 @@ class FetchDependencyGraph {
       return;
     }
     this.reduce();
+
 
     for (const group of this.rootGroups.values()) {
       this.removeEmptyGroups(group);
@@ -2781,7 +2823,11 @@ class FetchDependencyGraph {
     main: TProcessed,
     deferred: TDeferred[],
   } {
+    this.dumpOnConsole(`Before optimizing`);
+
     this.reduceAndOptimize();
+
+    this.dumpOnConsole(`After optimizing`);
 
     const { mainSequence, deferred } = this.processRootGroups({
       processor,
@@ -2878,6 +2924,7 @@ type PlanningParameters<RV extends Vertex> = {
   statistics?: PlanningStatistics,
   processor: FetchGroupProcessor<PlanNode | undefined, DeferredNode>
   root: RV,
+  interfacesTypesWithInterfaceObjects: Set<string>,
   inconsistentAbstractTypesRuntimes: Set<string>,
   config: Concrete<QueryPlannerConfig>,
 }
@@ -3047,6 +3094,7 @@ export class QueryPlanner {
       processor,
       root,
       statistics,
+      interfacesTypesWithInterfaceObjects: this.interfaceTypesWithInterfaceObjects,
       inconsistentAbstractTypesRuntimes: this.inconsistentAbstractTypesRuntimes,
       config: this.config,
     }
@@ -3434,7 +3482,7 @@ function createEmptyPlan(
 ): [FetchDependencyGraph, OpPathTree<RootVertex>, number] {
   const { supergraphSchema, federatedQueryGraph, root } = parameters;
   return [
-    FetchDependencyGraph.create(supergraphSchema, federatedQueryGraph, 0, undefined),
+    FetchDependencyGraph.create(supergraphSchema, federatedQueryGraph, 0, undefined, parameters),
     PathTree.createOp(federatedQueryGraph, root),
     0
   ];
@@ -3471,7 +3519,7 @@ function computeRootSerialDependencyGraph(
       // }
       // then we should _not_ merge the 2 `mut1` fields (contrarily to what happens on queried fields).
       prevPaths = prevPaths.concat(newPaths);
-      prevDepGraph = computeRootFetchGroups(FetchDependencyGraph.create(supergraphSchema, federatedQueryGraph, startingFetchId, rootType), prevPaths, root.rootKind);
+      prevDepGraph = computeRootFetchGroups(FetchDependencyGraph.create(supergraphSchema, federatedQueryGraph, startingFetchId, rootType, parameters), prevPaths, root.rootKind);
     } else {
       startingFetchId = prevDepGraph.nextFetchId();
       graphs.push(prevDepGraph);
