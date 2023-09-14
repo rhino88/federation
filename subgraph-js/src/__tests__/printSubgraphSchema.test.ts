@@ -4,6 +4,7 @@ import { printSubgraphSchema } from '../printSubgraphSchema';
 import gql from 'graphql-tag';
 import './matchers';
 import { FEDERATION2_LINK_WITH_AUTO_EXPANDED_IMPORTS } from '@apollo/federation-internals';
+import { buildSchema, executeSync } from 'graphql';
 
 describe('printSubgraphSchema', () => {
   it('prints a subgraph correctly', () => {
@@ -245,5 +246,218 @@ describe('printSubgraphSchema', () => {
 
     const printed = printSubgraphSchema(buildSubgraphSchema(gql(schema)));
     expect(printed).toMatchString(schema);
+  });
+
+  it.only('reproduce', () => {
+    const subgraphSchema = buildSubgraphSchema(gql`
+      enum MyEnum {
+        A
+      }
+
+      input HelloInput {
+        name: MyEnum = A
+      }
+
+      type Query {
+        hello(input: HelloInput): String
+      }
+    `);
+    expect(printSubgraphSchema(subgraphSchema)).toMatchString(`
+      enum MyEnum {
+        A
+      }
+
+      input HelloInput {
+        name: MyEnum = A
+      }
+
+      type Query {
+        hello(input: HelloInput): String
+      }
+    `);
+
+    const introspect = gql`
+      query IntrospectionQuery {
+        __schema {
+          types {
+            name
+            inputFields {
+              name
+              defaultValue # <-- this guy
+            }
+          }
+        }
+      }
+    `;
+
+    const subgraphResult = executeSync({
+      schema: subgraphSchema,
+      document: introspect,
+    });
+    expect(subgraphResult).toMatchInlineSnapshot(`
+      Object {
+        "data": Object {
+          "__schema": Object {
+            "types": Array [
+              Object {
+                "inputFields": null,
+                "name": "MyEnum",
+              },
+              Object {
+                "inputFields": Array [
+                  Object {
+                    "defaultValue": "A",
+                    "name": "name",
+                  },
+                ],
+                "name": "HelloInput",
+              },
+              Object {
+                "inputFields": null,
+                "name": "Query",
+              },
+              Object {
+                "inputFields": null,
+                "name": "String",
+              },
+              Object {
+                "inputFields": null,
+                "name": "_FieldSet",
+              },
+              Object {
+                "inputFields": null,
+                "name": "_Any",
+              },
+              Object {
+                "inputFields": null,
+                "name": "_Service",
+              },
+              Object {
+                "inputFields": null,
+                "name": "Boolean",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__Schema",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__Type",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__TypeKind",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__Field",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__InputValue",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__EnumValue",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__Directive",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__DirectiveLocation",
+              },
+            ],
+          },
+        },
+      }
+    `);
+
+    const graphqlSchema = buildSchema(`#graphql
+      enum MyEnum {
+        A
+      }
+
+      input HelloInput {
+        name: MyEnum = A
+      }
+
+      type Query {
+        hello(input: HelloInput): String
+      }
+    `);
+
+    const graphqlSchemaResult = executeSync({
+      schema: graphqlSchema,
+      document: introspect,
+    });
+    expect(graphqlSchemaResult).toMatchInlineSnapshot(`
+      Object {
+        "data": Object {
+          "__schema": Object {
+            "types": Array [
+              Object {
+                "inputFields": null,
+                "name": "MyEnum",
+              },
+              Object {
+                "inputFields": Array [
+                  Object {
+                    "defaultValue": "A",
+                    "name": "name",
+                  },
+                ],
+                "name": "HelloInput",
+              },
+              Object {
+                "inputFields": null,
+                "name": "Query",
+              },
+              Object {
+                "inputFields": null,
+                "name": "String",
+              },
+              Object {
+                "inputFields": null,
+                "name": "Boolean",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__Schema",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__Type",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__TypeKind",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__Field",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__InputValue",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__EnumValue",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__Directive",
+              },
+              Object {
+                "inputFields": null,
+                "name": "__DirectiveLocation",
+              },
+            ],
+          },
+        },
+      }
+    `);
   });
 });
