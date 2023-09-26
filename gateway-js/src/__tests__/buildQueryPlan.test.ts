@@ -5,6 +5,7 @@ import {
 import { getFederatedTestingSchema } from './execution-utils';
 import { QueryPlan, QueryPlanner } from '@apollo/query-planner';
 import { Schema, parseOperation } from '@apollo/federation-internals';
+import gql from 'graphql-tag';
 
 expect.addSnapshotSerializer(astSerializer);
 expect.addSnapshotSerializer(queryPlanSerializer);
@@ -780,7 +781,7 @@ describe('buildQueryPlan', () => {
                         }
                       }
                     }
-                    
+
                     fragment PriceAndCountry on Product {
                       price
                       details {
@@ -1228,5 +1229,188 @@ describe('buildQueryPlan', () => {
         }
       `);
     });
+  });
+
+  it.only('reproduction', () => {
+    const s1 = {
+      name: 's1',
+      typeDefs: gql`
+        scalar JSON
+
+        type Query {
+          tpquery: TPResponse
+        }
+
+        type TPResponse {
+          tp: TP
+        }
+
+        type TP {
+          pg: [TPPG!]!
+        }
+
+        type TPPG {
+          fieldA: [TPA!]!
+        }
+
+        interface CA {
+          canDeselect: Boolean!
+        }
+
+        union TPA = CCA | DSA
+
+        type CCA implements CA {
+          canDeselect: Boolean!
+          c1: C1
+        }
+
+        type DSA implements CA {
+          canDeselect: Boolean!
+          c1: C2
+        }
+
+        extend type C2 @key(fields: "id") {
+          id: ID! @external
+          needsBoolean: Boolean!
+        }
+
+        extend type C1 @key(fields: "id _prefetch_") {
+          id: ID! @external
+          _prefetch_: JSON @external
+          needsBoolean: Boolean!
+        }
+      `,
+    };
+
+    const s2 = {
+      name: 's2',
+      typeDefs: gql`
+        scalar JSON
+
+        type O1 {
+          field1: String
+        }
+
+        type Query {
+          getE2: O1
+        }
+
+        interface EBase {
+          id: ID!
+          field1: String
+        }
+
+        type C2 implements EBase @key(fields: "id") {
+          id: ID!
+          field1: String
+          isDefault: Boolean
+        }
+
+        type C1 implements EBase
+          @key(fields: "id _prefetch_")
+          @key(fields: "id") {
+          id: ID!
+          _prefetch_: JSON
+          field1: String
+          isDefault: Boolean #@requires(fields: "_prefetch_")
+        }
+      `,
+    };
+
+    ({ schema, queryPlanner } = getFederatedTestingSchema([s1, s2]));
+
+    const plan = buildPlan(`#graphql
+      query tp {
+        tpquery {
+          tp {
+            pg {
+              fieldA {
+                ... on CCA {
+                  canDeselect
+                  c1 {
+                    __typename
+                    id
+                    isDefault
+                  }
+                }
+                ... on DSA {
+                  canDeselect
+                  c1 {
+                    __typename
+                    id
+                    isDefault
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      `);
+
+    // Expecting the following :
+    // ... on CCA {
+    //   canDeselect
+    //   c1 {
+    //     __typename
+    //     id
+    //     _prefetch_
+    //   }
+    // }
+    expect(plan).toMatchInlineSnapshot(`
+      QueryPlan {
+        Sequence {
+          Fetch(service: "s1") {
+            {
+              tpquery {
+                tp {
+                  pg {
+                    fieldA {
+                      __typename
+                      ... on CCA {
+                        canDeselect
+                        c1 {
+                          __typename
+                          id
+                        }
+                      }
+                      ... on DSA {
+                        canDeselect
+                        c1 {
+                          __typename
+                          id
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          Flatten(path: "tpquery.tp.pg.@.fieldA.@.c1") {
+            Fetch(service: "s2") {
+              {
+                ... on C1 {
+                  __typename
+                  id
+                }
+                ... on C2 {
+                  __typename
+                  id
+                }
+              } =>
+              {
+                ... on C1 {
+                  isDefault
+                }
+                ... on C2 {
+                  isDefault
+                }
+              }
+            },
+          },
+        },
+      }
+    `);
   });
 });
