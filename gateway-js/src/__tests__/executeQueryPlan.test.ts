@@ -4278,7 +4278,9 @@ describe('executeQueryPlan', () => {
             dependentField(o: { requiredField: { f1: string | null } | null }) {
               dependentResolverSpy();
               return o.requiredField === null
-                ? null
+                ? {
+                    a: `my @requires was null but my resolver was still called`,
+                  }
                 : { a: `t1:${o.requiredField.f1}` };
             },
           },
@@ -4372,7 +4374,9 @@ describe('executeQueryPlan', () => {
               "id": 0,
             },
             Object {
-              "dependentField": null,
+              "dependentField": Object {
+                "a": "my @requires was null but my resolver was still called",
+              },
               "id": 1,
             },
           ],
