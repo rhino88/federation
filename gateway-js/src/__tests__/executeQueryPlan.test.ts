@@ -4211,6 +4211,176 @@ describe('executeQueryPlan', () => {
         }
       `);
     });
+
+    test('resolvers that `@requires` objects (which resolve to null) are called even when the `@required` object is null', async () => {
+      const dependentResolverSpy = jest.fn();
+
+      // Note, there are 2 items in the list. We expect the `dependentField`
+      // resolver to be called for both, even though `requiredField` is null in
+      // the second object.
+      const s1Data = [
+        { id: 0, requiredField: { f1: 'foo' } },
+        { id: 1, requiredField: null },
+      ];
+
+      const s1 = {
+        name: 'S1',
+        typeDefs: gql`
+          type T1 @key(fields: "id") {
+            id: Int!
+            requiredField: RequiredField
+          }
+
+          type RequiredField {
+            f1: String
+          }
+        `,
+        resolvers: {
+          T1: {
+            __resolveReference(ref: { id: number }) {
+              return s1Data[ref.id];
+            },
+          },
+        },
+      };
+
+      const s2 = {
+        name: 'S2',
+        typeDefs: gql`
+          type Query {
+            getT1s: [T1]
+          }
+
+          type T1 @key(fields: "id") {
+            id: Int!
+            requiredField: RequiredField @external
+            dependentField: T2 @requires(fields: "requiredField { f1 }")
+          }
+
+          type RequiredField @external {
+            f1: String @external
+          }
+
+          type T2 {
+            a: String
+          }
+        `,
+        resolvers: {
+          Query: {
+            getT1s() {
+              return [{ id: 0 }, { id: 1 }];
+            },
+          },
+          T1: {
+            __resolveReference(ref: { id: number }) {
+              return ref;
+            },
+            dependentField(o: { requiredField: { f1: string | null } | null }) {
+              dependentResolverSpy();
+              return o.requiredField === null
+                ? null
+                : { a: `t1:${o.requiredField.f1}` };
+            },
+          },
+        },
+      };
+
+      const { serviceMap, schema, queryPlanner } = getFederatedTestingSchema([
+        s1,
+        s2,
+      ]);
+
+      const operation = parseOp(
+        `#graphql
+        query {
+          getT1s {
+            id
+            dependentField {
+              a
+            }
+          }
+        }
+        `,
+        schema,
+      );
+      const queryPlan = buildPlan(operation, queryPlanner);
+      expect(queryPlan).toMatchInlineSnapshot(`
+        QueryPlan {
+          Sequence {
+            Fetch(service: "S2") {
+              {
+                getT1s {
+                  __typename
+                  id
+                }
+              }
+            },
+            Flatten(path: "getT1s.@") {
+              Fetch(service: "S1") {
+                {
+                  ... on T1 {
+                    __typename
+                    id
+                  }
+                } =>
+                {
+                  ... on T1 {
+                    requiredField {
+                      f1
+                    }
+                  }
+                }
+              },
+            },
+            Flatten(path: "getT1s.@") {
+              Fetch(service: "S2") {
+                {
+                  ... on T1 {
+                    __typename
+                    requiredField {
+                      f1
+                    }
+                    id
+                  }
+                } =>
+                {
+                  ... on T1 {
+                    dependentField {
+                      a
+                    }
+                  }
+                }
+              },
+            },
+          },
+        }
+      `);
+      const response = await executePlan(
+        queryPlan,
+        operation,
+        undefined,
+        schema,
+        serviceMap,
+      );
+      expect(response.data).toMatchInlineSnapshot(`
+        Object {
+          "getT1s": Array [
+            Object {
+              "dependentField": Object {
+                "a": "t1:foo",
+              },
+              "id": 0,
+            },
+            Object {
+              "dependentField": null,
+              "id": 1,
+            },
+          ],
+        }
+      `);
+      expect(response.errors).toBeUndefined();
+      expect(dependentResolverSpy).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('@key', () => {
