@@ -1,5 +1,18 @@
 # CHANGELOG for `@apollo/composition`
 
+## 2.6.0
+### Minor Changes
+
+
+- Update `license` field in `package.json` to use `Elastic-2.0` SPDX identifier ([#2741](https://github.com/apollographql/federation/pull/2741))
+
+
+### Patch Changes
+
+- Updated dependencies [[`b18841be`](https://github.com/apollographql/federation/commit/b18841be897e6d4f47454568776f199e2adb60ae)]:
+  - @apollo/query-graphs@2.6.0
+  - @apollo/federation-internals@2.6.0
+
 ## 2.5.5
 ### Patch Changes
 
